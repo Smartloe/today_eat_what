@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -22,10 +22,11 @@ class CostTracker:
 
 
 class ModelClient:
-    def __init__(self, vendor: str, api_key: Optional[str]) -> None:
+    def __init__(self, vendor: str, api_key: Optional[str], default_model: Optional[str] = None) -> None:
         self.vendor = vendor
         self.api_key = api_key
         self.endpoint = str(MODEL_CONFIG.get(vendor, {}).get("endpoint", "")).rstrip("/")
+        self.default_model = default_model or MODEL_CONFIG.get(vendor, {}).get("model")
         if not self.endpoint:
             logger.warning("Endpoint for %s not configured; calls will return mock data.", vendor)
 
@@ -51,4 +52,22 @@ class ModelClient:
             return self._post_json(payload, timeout=timeout)
         except Exception as exc:
             logger.error("Model %s call failed: %s", self.vendor, exc)
+            raise
+
+    def invoke_chat(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+        timeout: float = 10.0,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"messages": messages}
+        if model or self.default_model:
+            payload["model"] = model or self.default_model
+        if extra:
+            payload.update(extra)
+        try:
+            return self._post_json(payload, timeout=timeout)
+        except Exception as exc:
+            logger.error("Model %s chat call failed: %s", self.vendor, exc)
             raise

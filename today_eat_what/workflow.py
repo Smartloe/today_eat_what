@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, TypedDict
@@ -69,13 +70,33 @@ def call_how_to_cook(meal_type: str) -> Dict[str, Any]:
 
 def fetch_recipe(meal_type: str, qwen: ModelClient, cost: CostTracker) -> Recipe:
     # Ask Qwen to pick a recipe and enrich with HowToCook data.
-    qwen_prompt = (
-        f"你是美食助理，根据餐次“{meal_type}”推荐1道简单、家常且健康的菜谱，"
-        "返回JSON，包含name/description/ingredients(list)/steps(list)。"
-    )
+    messages = [
+        {
+            "role": "system",
+            "content": "你是美食助理，专注家常菜谱。请输出 JSON 对象 {\"recipe\": {...}}，"
+            "包含 name/description/ingredients(list)/steps(list: {order, instruction})。",
+        },
+        {"role": "user", "content": f"餐次：{meal_type}，请给出适合这一餐次的1道菜。"},
+    ]
     cost.add("qwen")
-    llm_resp = qwen.invoke(qwen_prompt)
+    llm_resp = qwen.invoke_chat(messages, extra={"temperature": 0.4})
     recipe_data = llm_resp.get("recipe") if isinstance(llm_resp, dict) else None
+
+    if not recipe_data and isinstance(llm_resp, dict):
+        content = (
+            llm_resp.get("content")
+            or llm_resp.get("text")
+            or llm_resp.get("output")
+            or (llm_resp.get("choices") or [{}])[0].get("message", {}).get("content")
+        )
+        if content:
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    recipe_data = parsed.get("recipe") or parsed
+            except json.JSONDecodeError:
+                logger.warning("Qwen 返回非JSON内容，回退到 MCP：%s", content[:50])
+
     if not recipe_data:
         recipe_data = call_how_to_cook(meal_type).get("recipe", {})
 
@@ -176,7 +197,7 @@ def build_app() -> StateGraph:
     api_keys = load_api_keys()
     cost_tracker = CostTracker()
 
-    qwen_client = ModelClient("qwen", api_keys.qwen)
+    qwen_client = ModelClient("qwen", api_keys.qwen, default_model=MODEL_CONFIG.get("qwen", {}).get("model"))
     deepseek_client = ModelClient("deepseek", api_keys.deepseek)
     longcat_client = ModelClient("longcat", api_keys.longcat)
     doubao_client = ModelClient("doubao", api_keys.doubao)

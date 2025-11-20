@@ -2,9 +2,13 @@ import os
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+SILICONFLOW_BASE_URL = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+QWEN_MODEL_DEFAULT = os.environ.get("QWEN_MODEL", os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B"))
+QWEN_ENDPOINT_DEFAULT = os.environ.get("QWEN_ENDPOINT") or f"{SILICONFLOW_BASE_URL.rstrip('/')}/chat/completions"
+
 # Model endpoints and nominal costs; endpoints are meant to be overridden via env.
 MODEL_CONFIG: Dict[str, Dict[str, object]] = {
-    "qwen": {"endpoint": os.environ.get("QWEN_ENDPOINT", ""), "cost_per_call": 0.01},
+    "qwen": {"endpoint": QWEN_ENDPOINT_DEFAULT, "model": QWEN_MODEL_DEFAULT, "cost_per_call": 0.01},
     "deepseek": {"endpoint": os.environ.get("DEEPSEEK_ENDPOINT", ""), "cost_per_call": 0.02},
     "longcat": {"endpoint": os.environ.get("LONGCAT_ENDPOINT", ""), "cost_per_call": 0.005},
     "doubao": {"endpoint": os.environ.get("DOUBAO_ENDPOINT", ""), "cost_per_call": 0.03},
@@ -26,7 +30,7 @@ class ApiKeys:
 
 def load_api_keys() -> ApiKeys:
     return ApiKeys(
-        qwen=os.environ.get("QWEN_API_KEY"),
+        qwen=os.environ.get("QWEN_API_KEY") or os.environ.get("SILICONFLOW_API_KEY"),
         deepseek=os.environ.get("DEEPSEEK_API_KEY"),
         longcat=os.environ.get("LONGCAT_API_KEY"),
         doubao=os.environ.get("DOUBAO_API_KEY"),
