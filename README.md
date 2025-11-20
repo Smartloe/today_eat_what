@@ -48,6 +48,8 @@ uv run python main.py
 5. 调用 豆包 生成封面与步骤图片。
 6. 调用 GPT-4.5-flash / 小红书 MCP 发布，并返回发布结果。
 
+各步骤在 `today_eat_what/agents/` 下的独立智能体实现，LangGraph 在 `today_eat_what/workflow.py` 里编排。
+
 ### Qwen / SiliconFlow 接入
 - 默认使用 `SILICONFLOW_BASE_URL/chat/completions` 与 `Qwen/Qwen3-8B` 模型；可通过 `QWEN_ENDPOINT` 和 `QWEN_MODEL` 覆盖。
 - 传入 `.env` 中的 `SILICONFLOW_API_KEY` 或 `QWEN_API_KEY` 即可。
