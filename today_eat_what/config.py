@@ -2,6 +2,13 @@ import os
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+_deepseek_base = os.environ.get("DEEPSEEK_BASE_URL", "")
+_deepseek_endpoint = os.environ.get("DEEPSEEK_ENDPOINT", "")
+if _deepseek_base and not _deepseek_endpoint:
+    # OpenAI 兼容路径
+    _deepseek_endpoint = _deepseek_base.rstrip("/") + "/chat/completions"
+DEEPSEEK_MODEL_DEFAULT = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
 SILICONFLOW_BASE_URL = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
 QWEN_MODEL_DEFAULT = os.environ.get("QWEN_MODEL", os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B"))
 QWEN_ENDPOINT_DEFAULT = os.environ.get("QWEN_ENDPOINT") or f"{SILICONFLOW_BASE_URL.rstrip('/')}/chat/completions"
@@ -9,7 +16,7 @@ QWEN_ENDPOINT_DEFAULT = os.environ.get("QWEN_ENDPOINT") or f"{SILICONFLOW_BASE_U
 # Model endpoints and nominal costs; endpoints are meant to be overridden via env.
 MODEL_CONFIG: Dict[str, Dict[str, object]] = {
     "qwen": {"endpoint": QWEN_ENDPOINT_DEFAULT, "model": QWEN_MODEL_DEFAULT, "cost_per_call": 0.01},
-    "deepseek": {"endpoint": os.environ.get("DEEPSEEK_ENDPOINT", ""), "cost_per_call": 0.02},
+    "deepseek": {"endpoint": _deepseek_endpoint, "model": DEEPSEEK_MODEL_DEFAULT, "cost_per_call": 0.02},
     "longcat": {"endpoint": os.environ.get("LONGCAT_ENDPOINT", ""), "cost_per_call": 0.005},
     "doubao": {"endpoint": os.environ.get("DOUBAO_ENDPOINT", ""), "cost_per_call": 0.03},
     "gpt4": {"endpoint": os.environ.get("GPT4_ENDPOINT", ""), "cost_per_call": 0.05},

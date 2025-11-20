@@ -1,4 +1,5 @@
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +27,10 @@ class ModelClient:
         self.vendor = vendor
         self.api_key = api_key
         self.endpoint = str(MODEL_CONFIG.get(vendor, {}).get("endpoint", "")).rstrip("/")
+        if not self.endpoint:
+            base = os.environ.get(f"{vendor.upper()}_BASE_URL", "")
+            if base:
+                self.endpoint = base.rstrip("/") + "/chat/completions"
         self.default_model = default_model or MODEL_CONFIG.get(vendor, {}).get("model")
         if not self.endpoint:
             logger.warning("Endpoint for %s not configured; calls will return mock data.", vendor)
@@ -45,7 +50,13 @@ class ModelClient:
         return run_with_retry(lambda: run_with_timeout(do_request, timeout))
 
     def invoke(self, prompt: str, extra: Optional[Dict[str, Any]] = None, timeout: float = 10.0) -> Dict[str, Any]:
-        payload = {"prompt": prompt}
+        # If hitting OpenAI-compatible chat, wrap prompt into messages and include model.
+        if self.endpoint.endswith("/chat/completions"):
+            payload: Dict[str, Any] = {"messages": [{"role": "user", "content": prompt}]}
+            if self.default_model:
+                payload["model"] = self.default_model
+        else:
+            payload = {"prompt": prompt}
         if extra:
             payload.update(extra)
         try:
