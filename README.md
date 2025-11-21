@@ -59,3 +59,4 @@ uv run python main.py
 - LangGraph 管线在 `today_eat_what/workflow.py`。
 - 所有模型调用带超时 + 重试，成本估算在 `CostTracker`。
 - 端点缺失时会回退到 mock 数据，便于本地调试。
+- env 读取：`DEEPSEEK_BASE_URL`、`LONGCAT_BASE_URL` 会自动拼接 `/chat/completions` 兼容 OpenAI 风格接口；也可直接提供完整 `*_ENDPOINT`。
