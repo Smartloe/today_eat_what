@@ -14,6 +14,9 @@ QWEN_MODEL=Qwen/Qwen3-8B
 DEEPSEEK_API_KEY=your_deepseek_key
 LONGCAT_API_KEY=your_longcat_key
 DOUBAO_API_KEY=your_doubao_key
+DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3        # 豆包文生图基址
+DOUBAO_IMAGE_MODEL=doubao-seedream-4-0-250828                   # 可选，图像模型
+DOUBAO_IMAGE_SIZE=2K                                            # 可选，保持 9:16 竖版
 GPT4_API_KEY=your_gpt4_key
 XIAOHONGSHU_MCP_URL=your_mcp_endpoint           # 可选
 HOWTOCOOK_MCP_URL=your_howtocook_endpoint       # 可选
@@ -45,7 +48,7 @@ uv run python main.py
 2. 调用 Qwen 生成菜谱（若端点缺失则使用 HowToCook MCP 或内置示例）。
 3. 调用 DeepSeek 生成小红书风格标题+正文。
 4. 调用 LongCat 审核内容，未通过则自动重写文案。
-5. 调用 豆包 生成封面与步骤图片。
+5. 调用 豆包 Ark 文生图生成 9:16 手绘/涂鸦风封面与步骤插画。
 6. 调用 GPT-4.5-flash / 小红书 MCP 发布，并返回发布结果。
 
 各步骤在 `today_eat_what/agents/` 下的独立智能体实现，LangGraph 在 `today_eat_what/workflow.py` 里编排。
