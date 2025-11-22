@@ -1,7 +1,8 @@
 import os
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
+from datetime import datetime
 from langchain.agents import create_agent
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
@@ -26,52 +27,66 @@ class ContentAgent:
     def _generate_content(self, recipe: dict) -> Dict[str, str]:
         """生成小红书风格文案，返回 JSON: {title, body, content}。"""
         recipe_obj = Recipe(**recipe)
+        dishes = recipe.get("dishes") or []
+        dish_names = [d.get("name") for d in dishes if isinstance(d, dict) and d.get("name")]
+        if not dish_names:
+            dish_names = [recipe_obj.name]
+        weekday = ["一", "二", "三", "四", "五", "六", "日"][datetime.now().weekday()]
+
+        summary_parts: List[str] = []
+        for dish in dishes:
+            if not isinstance(dish, dict):
+                continue
+            name = dish.get("name") or ""
+            desc = dish.get("description") or ""
+            ing = dish.get("ingredients") or []
+            summary_parts.append(f"{name}：{desc}｜食材：{', '.join(ing[:4])}")
+        if not summary_parts:
+            summary_parts.append(f"{recipe_obj.name}：{recipe_obj.description}")
+
         title_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", "你是小红书美食创作者，写20字内的吸睛标题，带1个表情。"),
-                ("human", "菜名：{name}，餐次：{meal_type}"),
+                ("human", "餐次：{meal_type}，菜品：{dishes}"),
             ]
         )
         body_prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "生成小红书风格文案，包含食材、步骤亮点、口味描述，配2-3个话题标签，使用表情符号。控制在180字以内。",
+                    "用小红书口吻写一段文案，包含：今天周几+餐次开场、每道菜的搭配理由/亮点、2-3个话题标签，带表情符号，控制在180字内。",
                 ),
-                ("human", "菜谱：{description}；主要食材：{ingredients}；步骤：{steps}"),
+                ("human", "餐次：{meal_type}，菜品详情：{dish_summary}"),
             ]
         )
 
         self.cost.add("deepseek")
         try:
-            title_resp = self.deepseek.invoke(title_prompt.format(name=recipe_obj.name, meal_type=recipe_obj.meal_type))
+            title_resp = self.deepseek.invoke(
+                title_prompt.format(meal_type=recipe_obj.meal_type, dishes=" + ".join(dish_names))
+            )
             body_resp = self.deepseek.invoke(
-                body_prompt.format(
-                    description=recipe_obj.description,
-                    ingredients=", ".join(recipe_obj.ingredients),
-                    steps=" / ".join([s.instruction for s in recipe_obj.steps]),
-                )
+                body_prompt.format(meal_type=recipe_obj.meal_type, dish_summary=" / ".join(summary_parts))
             )
             title = title_resp.get("text") or title_resp.get("output") or "美味上线"
             body = body_resp.get("text") or body_resp.get("output") or ""
             if not body or not title:
                 raise ValueError("LLM returned empty content")
+            body = f"今天周{weekday} | {recipe_obj.meal_type}\n" + body
             return {"title": title, "body": body, "content": f"{title}\n{body}"}
-        except Exception as exc:  # pragma: no cover - LLM failure guard
+        except Exception:
             # Fallback本地模板，确保推理不中断。
-            fallback = self._fallback_copy(recipe_obj)
+            fallback = self._fallback_copy(recipe_obj, dish_names, summary_parts, weekday)
             return fallback
 
-    def _fallback_copy(self, recipe_obj: Recipe) -> Dict[str, str]:
+    def _fallback_copy(self, recipe_obj: Recipe, dish_names: List[str], summary_parts: List[str], weekday: str) -> Dict[str, str]:
         tags = ["#家常菜", "#当季食材", f"#{recipe_obj.meal_type}灵感"]
         body = (
-            f"{recipe_obj.name} | {recipe_obj.meal_type}灵感\n"
-            f"食材：{', '.join(recipe_obj.ingredients)}\n"
-            f"步骤亮点：{' / '.join([s.instruction for s in recipe_obj.steps[:3]])}\n"
-            f"口味：{recipe_obj.description}\n"
+            f"今天周{weekday} | {recipe_obj.meal_type}\n"
+            f"{'；'.join(summary_parts)}\n"
             f"{' '.join(tags)}"
         )
-        title = "美味上线 🍴"
+        title = f"{' + '.join(dish_names[:3])} | 今日餐单 🍽️"
         return {"title": title, "body": body, "content": f"{title}\n{body}"}
 
     def get_agent(self):

@@ -14,6 +14,7 @@ class Recipe(BaseModel):
     ingredients: List[str] = Field(default_factory=list)
     steps: List[RecipeStep] = Field(default_factory=list)
     meal_type: str
+    dishes: Optional[List[Dict[str, Any]]] = None
 
 
 class AuditResult(BaseModel):

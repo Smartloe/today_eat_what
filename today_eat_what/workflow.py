@@ -81,6 +81,43 @@ def build_app() -> StateGraph:
             else:
                 fixed_steps.append({"order": idx, "instruction": str(s)})
         normalized["steps"] = fixed_steps
+        dishes = normalized.get("dishes") or []
+        fixed_dishes: List[Dict[str, Any]] = []
+        for dish in dishes:
+            if not isinstance(dish, dict):
+                continue
+            d = dict(dish)
+            d_ings = d.get("ingredients") or []
+            if any(isinstance(i, dict) for i in d_ings):
+                ing_list: List[str] = []
+                for item in d_ings:
+                    if isinstance(item, dict):
+                        name = item.get("ingredient") or item.get("name") or ""
+                        qty = item.get("quantity") or item.get("qty") or ""
+                        combo = f"{name} {qty}".strip()
+                        if combo:
+                            ing_list.append(combo)
+                    else:
+                        ing_list.append(str(item))
+                d["ingredients"] = ing_list
+            d_steps = d.get("steps") or []
+            ds_fixed: List[Dict[str, Any]] = []
+            for idx, s in enumerate(d_steps, start=1):
+                if isinstance(s, dict):
+                    order = s.get("order") or idx
+                    instr = s.get("instruction") or s.get("step") or ""
+                    ds_fixed.append({"order": order, "instruction": instr})
+                else:
+                    ds_fixed.append({"order": idx, "instruction": str(s)})
+            d["steps"] = ds_fixed
+            fixed_dishes.append(d)
+        if fixed_dishes:
+            normalized["dishes"] = fixed_dishes
+            if not normalized.get("ingredients"):
+                combined_ings: List[str] = []
+                for dish in fixed_dishes:
+                    combined_ings.extend(dish.get("ingredients", []))
+                normalized["ingredients"] = combined_ings
         return normalized
 
     def node_recipe(state: WorkflowState) -> WorkflowState:

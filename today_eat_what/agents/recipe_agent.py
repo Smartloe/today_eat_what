@@ -55,7 +55,13 @@ def get_season(now: Optional[datetime] = None) -> str:
 
 
 class RecipeAgent:
-    def __init__(self, model_client: Optional[ModelClient] = None, cost: Optional[CostTracker] = None, people: int = 1, dislikes: str = "无偏好") -> None:
+    def __init__(
+        self,
+        model_client: Optional[ModelClient] = None,
+        cost: Optional[CostTracker] = None,
+        people: int = 1,
+        dislikes: str = "无偏好",
+    ) -> None:
         self.people = people
         self.dislikes = dislikes
         self.agent = None
@@ -102,7 +108,11 @@ class RecipeAgent:
 你是一个专业的烹饪助手。优先使用 MCP 工具，策略如下：
 - 优先调用 mcp_howtocook_whatToEat 根据人数/饮食偏好/当前餐次/季节直接给出组合。
 - 若组合不符合当前季节或餐次，调用 mcp_howtocook_getAllRecipes 拉取全部菜谱，再筛选出符合“{get_season()}”和“{get_meal_type()}”的菜谱。
-- 输出严格 JSON，字段：name, description, ingredients(List[str]), steps(List[{{order:int, instruction:str}}]), meal_type(当前餐次)。
+- 输出严格 JSON，字段：
+  name: 餐单标题（例如“{get_meal_type()}双拼组合”）
+  description: 20字内餐单简介
+  meal_type: 当前餐次
+  dishes: List，长度 2-3；每项 {{"name": 菜名, "description": 简介, "ingredients": List[str], "steps": List[{{"order":int,"instruction":str}}]}}
 - 仅输出 JSON，不要多余文字。
 - 若无工具可用，直接用模型生成符合季节与餐次的家常菜谱，并按上述 JSON 返回。
 """
@@ -127,14 +137,12 @@ class RecipeAgent:
         """当工具返回不可解析时，直接用模型生成 JSON 菜谱。"""
         llm = self._init_model()
         prompt = f"""
-请生成一份 JSON 菜谱，字段：
-- name: 菜名
+请生成一份 JSON 餐单，字段：
+- name: 餐单标题
 - description: 20字内简介
-- ingredients: 食材数组（带数量）
-- steps: 数组，每项 {{"order":编号, "instruction":步骤描述}}
 - meal_type: "{meal}"
-约束：适合 {people} 人，当前餐次 {meal}，季节 {season}，忌口/过敏：{dislikes}。
-仅输出 JSON，不要多余文字。
+- dishes: 长度2-3的数组，每项 {{"name":菜名, "description":简介, "ingredients":食材数组（带数量）, "steps":数组，每项 {{"order":编号,"instruction":步骤描述}}}}
+约束：适合 {people} 人，当前餐次 {meal}，季节 {season}，忌口/过敏：{dislikes}。仅输出 JSON，不要多余文字。
 """
         try:
             resp = llm.invoke(prompt).content
