@@ -96,11 +96,15 @@ class PublishAgent:
             loop.close()
         return self._mcp_publish_tool
 
-    def _publish_via_mcp(self, content: str, images: List[str]) -> Optional[PublishResult]:
+    def _publish_via_mcp(self, content: str, images: List[str], tags: Optional[List[str]] = None) -> Optional[PublishResult]:
         publish_tool = self._ensure_mcp_tool()
         if not publish_tool:
             msg = self._mcp_error or "小红书 MCP 工具不可用，请检查服务。"
             raise RuntimeError(msg)
+
+        tags = tags or []
+        if "今天吃什么呢" not in tags:
+            tags = ["今天吃什么呢", *tags]
 
         args: dict[str, Any] = {}
         schema = getattr(publish_tool, "args_schema", None)
@@ -109,8 +113,10 @@ class PublishAgent:
             args["content"] = content
         if "images" in schema_fields:
             args["images"] = images
+        if "tags" in schema_fields:
+            args["tags"] = tags
         if not args:
-            args = {"content": content, "images": images}
+            args = {"content": content, "images": images, "tags": tags}
         # 一些 MCP 工具要求 title 字段，尝试自动补全。
         if "title" not in args:
             args["title"] = self._infer_title(content)
@@ -136,9 +142,9 @@ class PublishAgent:
             )
         return PublishResult(success=True, post_id=str(result), detail={"output": result})
 
-    def _publish(self, content: str, images: List[str]) -> dict:
+    def _publish(self, content: str, images: List[str], tags: Optional[List[str]] = None) -> dict:
         """仅通过 MCP 发布小红书，如失败则抛出异常。"""
-        mcp_result = self._publish_via_mcp(content, images)
+        mcp_result = self._publish_via_mcp(content, images, tags=tags)
         if not mcp_result:
             raise RuntimeError("小红书 MCP 发布返回空结果。")
         if not mcp_result.success:

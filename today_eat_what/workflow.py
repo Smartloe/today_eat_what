@@ -164,7 +164,8 @@ def build_app() -> StateGraph:
     def node_publish(state: WorkflowState) -> WorkflowState:
         content = state["content"].get("content") if isinstance(state["content"], dict) else state["content"]
         imgs = state.get("images") or []
-        result = publish_agent.publish_tool.invoke({"content": content, "images": imgs})
+        tags = ["今天吃什么呢"]
+        result = publish_agent.publish_tool.invoke({"content": content, "images": imgs, "tags": tags})
         logger.info("发布结果：%s %s", result.get("success"), result.get("post_id"))
         return {
             **state,
