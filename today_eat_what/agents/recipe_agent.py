@@ -8,6 +8,9 @@ from typing import Dict, List, Optional
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_core.tools import tool
+
+from today_eat_what.clients import CostTracker, ModelClient
 
 """
 菜谱智能体（类封装）：
@@ -20,6 +23,7 @@ dotenv.load_dotenv()
 _mcp_logger = logging.getLogger("mcp.client.stdio")
 _mcp_logger.setLevel(logging.CRITICAL)
 _mcp_logger.propagate = False
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -51,10 +55,13 @@ def get_season(now: Optional[datetime] = None) -> str:
 
 
 class RecipeAgent:
-    def __init__(self, people: int = 1, dislikes: str = "无偏好") -> None:
+    def __init__(self, model_client: Optional[ModelClient] = None, cost: Optional[CostTracker] = None, people: int = 1, dislikes: str = "无偏好") -> None:
         self.people = people
         self.dislikes = dislikes
         self.agent = None
+        self.model_client = model_client
+        self.cost = cost or CostTracker()
+        self.generate_recipe_tool = tool("generate_recipe", return_direct=True)(self._generate_recipe_sync)
 
     def _init_model(self) -> ChatOpenAI:
         """初始化 Qwen 模型（SiliconFlow 兼容接口）。"""
@@ -67,23 +74,23 @@ class RecipeAgent:
         )
 
     async def _load_tools(self) -> List:
+        # 支持 streamable_http MCP (优先环境变量 URL)，否则回退到 stdio npx。
+        from today_eat_what.config import HOWTOCOOK_MCP_URL
+
         tools: List = []
+        server_name = "howtocook"
+        connections = (
+            {server_name: {"transport": "streamable_http", "url": HOWTOCOOK_MCP_URL}}
+            if HOWTOCOOK_MCP_URL
+            else {server_name: {"transport": "stdio", "command": "npx", "args": ["-y", "howtocook-mcp"]}}
+        )
         try:
-            client = MultiServerMCPClient(
-                {
-                    "howtocook": {
-                        "transport": "stdio",
-                        "command": "npx",
-                        "args": ["-y", "howtocook-mcp"],
-                    }
-                }
-            )
-            tools = await asyncio.wait_for(client.get_tools(), timeout=20)
+            client = MultiServerMCPClient(connections)
+            tools = await asyncio.wait_for(client.get_tools(server_name=server_name), timeout=20)
             if not tools:
-                print("⚠️ MCP 未返回工具，将以无工具模式运行。")
+                logger.warning("MCP 未返回工具，将以无工具模式运行。")
         except Exception as exc:  # pragma: no cover - external MCP
-            print(f"⚠️ MCP 连接警告: {exc}")
-            print("将以离线模式运行（无 HowToCook 工具）")
+            logger.warning("MCP 连接警告: %s，将以离线模式运行（无 HowToCook 工具）", exc)
             tools = []
         return tools
 
@@ -138,11 +145,11 @@ class RecipeAgent:
             logger.error("本地模型生成菜谱失败", exc_info=True)
         return {}
 
-    async def generate_recipe(self, people: Optional[int] = None, dislikes: Optional[str] = None) -> Dict:
+    async def generate_recipe(self, people: Optional[int] = None, dislikes: Optional[str] = None, meal_type: Optional[str] = None) -> Dict:
         """生成菜谱（优先 MCP 工具，带季节/餐次约束）。"""
         if not self.agent:
             await self.setup()
-        meal = get_meal_type()
+        meal = meal_type or get_meal_type()
         season = get_season()
         people = people or self.people
         dislikes = dislikes or self.dislikes
@@ -153,8 +160,6 @@ class RecipeAgent:
             "优先使用 mcp_howtocook_whatToEat，若不合适再用 mcp_howtocook_getAllRecipes 过滤符合餐次+季节的菜。"
         )
 
-        print(f"\n{'='*50}\n正在生成 {meal} 菜单（{season}，人数 {people}，忌口 {dislikes}）\n{'='*50}\n")
-
         try:
             result: Dict = await self.agent.ainvoke(
                 {
@@ -164,25 +169,22 @@ class RecipeAgent:
             if result.get("messages"):
                 final_message = result["messages"][-1]
                 content = final_message.content
-                print(f"✅ 菜谱生成结果:\n{content}\n")
                 parsed = self._parse_recipe(content, meal_type=meal)
                 if parsed:
                     return parsed
-                print("⚠️ 未解析出有效 JSON，改为直接模型生成。")
+                logger.warning("未解析出有效 JSON，改为直接模型生成。")
                 return self._generate_local_recipe(meal, season, people, dislikes)
             return self._generate_local_recipe(meal, season, people, dislikes)
         except Exception as exc:  # pragma: no cover - runtime guardrail
-            print(f"❌ 生成菜谱失败: {exc!r}")
+            logger.error("生成菜谱失败: %s", exc)
             return self._generate_local_recipe(meal, season, people, dislikes)
 
 
-async def main():
-    print("🍳 HowToCook 菜谱智能体启动...\n")
-    agent = RecipeAgent(people=1, dislikes="无偏好")
-    recipe = await agent.generate_recipe()
-    print("最终 JSON 菜谱：")
-    print(json.dumps(recipe, ensure_ascii=False, indent=2))
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    def _generate_recipe_sync(self, meal_type: Optional[str] = None, people: Optional[int] = None, dislikes: Optional[str] = None) -> Dict:
+        """同步包装：生成菜谱 JSON，参数可选 meal_type/people/dislikes。"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(self.generate_recipe(people=people, dislikes=dislikes, meal_type=meal_type))
+        finally:
+            loop.close()

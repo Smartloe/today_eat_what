@@ -18,7 +18,7 @@ class WorkflowState(TypedDict, total=False):
     current_time: str
     meal_type: str
     recipe_data: Dict[str, Any]
-    content: str
+    content: Dict[str, str]
     audit_result: bool
     images: List[str]
     publish_result: Dict[str, Any]
@@ -56,8 +56,36 @@ def build_app() -> StateGraph:
             "cost": cost_tracker.total_cost,
         }
 
+    def _normalize_recipe_data(data: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(data)
+        ingredients = normalized.get("ingredients") or []
+        if any(isinstance(i, dict) for i in ingredients):
+            ing_list: List[str] = []
+            for item in ingredients:
+                if isinstance(item, dict):
+                    name = item.get("ingredient") or item.get("name") or ""
+                    qty = item.get("quantity") or item.get("qty") or ""
+                    combined = f"{name} {qty}".strip()
+                    if combined:
+                        ing_list.append(combined)
+                else:
+                    ing_list.append(str(item))
+            normalized["ingredients"] = ing_list
+        steps = normalized.get("steps") or []
+        fixed_steps: List[Dict[str, Any]] = []
+        for idx, s in enumerate(steps, start=1):
+            if isinstance(s, dict):
+                order = s.get("order") or idx
+                instr = s.get("instruction") or s.get("step") or ""
+                fixed_steps.append({"order": order, "instruction": instr})
+            else:
+                fixed_steps.append({"order": idx, "instruction": str(s)})
+        normalized["steps"] = fixed_steps
+        return normalized
+
     def node_recipe(state: WorkflowState) -> WorkflowState:
         recipe_data = recipe_agent.generate_recipe_tool.invoke({"meal_type": state["meal_type"]})
+        recipe_data = _normalize_recipe_data(recipe_data)
         recipe = Recipe(**recipe_data)
         logger.info("生成菜谱：%s", recipe.name)
         return {**state, "recipe_data": recipe_data, "cost": cost_tracker.total_cost}
@@ -67,7 +95,8 @@ def build_app() -> StateGraph:
         return {**state, "content": content, "cost": cost_tracker.total_cost}
 
     def node_audit(state: WorkflowState) -> WorkflowState:
-        result = audit_agent.audit_content_tool.invoke({"content": state["content"]})
+        content_text = state["content"].get("content") if isinstance(state.get("content"), dict) else state["content"]
+        result = audit_agent.audit_content_tool.invoke({"content": content_text})
         logger.info("审核结果：%s", result.get("ok"))
         return {**state, "audit_result": result.get("ok"), "audit_detail": result, "cost": cost_tracker.total_cost}
 
@@ -78,16 +107,25 @@ def build_app() -> StateGraph:
             "以安全、温和的表达重写文案，避免任何可能违规的描述，保持小红书风格和表情。"
         )
         cost_tracker.add("deepseek")
-        resp = deepseek_client.invoke(safe_prompt + "\n原文：" + state["content"])
-        content = resp.get("text") or resp.get("output") or state["content"]
-        return {**state, "content": content, "audit_result": True, "cost": cost_tracker.total_cost}
+        original = state["content"].get("content") if isinstance(state["content"], dict) else str(state["content"])
+        resp = deepseek_client.invoke(safe_prompt + "\n原文：" + original)
+        new_body = resp.get("text") or resp.get("output") or original
+        rewritten = {
+            "title": state["content"].get("title", "安全改写") if isinstance(state["content"], dict) else "安全改写",
+            "body": new_body,
+            "content": f"{state['content'].get('title', '安全改写')}\n{new_body}"
+            if isinstance(state["content"], dict)
+            else new_body,
+        }
+        return {**state, "content": rewritten, "audit_result": True, "cost": cost_tracker.total_cost}
 
     def node_images(state: WorkflowState) -> WorkflowState:
-        imgs = image_agent.generate_images_tool.invoke({"recipe": state["recipe_data"]})
+        imgs_result = image_agent.generate_images_tool.invoke({"recipe": state["recipe_data"]})
+        imgs = imgs_result.get("images") if isinstance(imgs_result, dict) else imgs_result
         return {**state, "images": imgs, "cost": cost_tracker.total_cost}
 
     def node_publish(state: WorkflowState) -> WorkflowState:
-        content = state["content"]
+        content = state["content"].get("content") if isinstance(state["content"], dict) else state["content"]
         imgs = state.get("images") or []
         result = publish_agent.publish_tool.invoke({"content": content, "images": imgs})
         logger.info("发布结果：%s %s", result.get("success"), result.get("post_id"))

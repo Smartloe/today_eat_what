@@ -71,21 +71,3 @@ class AuditAgent:
         reasons = parsed.get("reasons") if isinstance(parsed, dict) else None
         risk = parsed.get("risk_level") if isinstance(parsed, dict) else None
         return AuditResult(ok=ok, reasons=reasons or [risk] if risk else None).model_dump()
-
-
-if __name__ == "__main__":
-    import argparse
-
-    load_dotenv()
-    setup_logging()
-    parser = argparse.ArgumentParser(description="Test AuditAgent.")
-    parser.add_argument("--text", default="Damn you, may your whole family suffer!")
-    args = parser.parse_args()
-
-    keys = load_api_keys()
-    cost = CostTracker()
-    longcat_client = ModelClient("longcat", keys.longcat, default_model=MODEL_CONFIG.get("longcat", {}).get("model"))
-    agent = AuditAgent(longcat_client, cost)
-    result = agent.audit_content_tool.invoke({"content": args.text})
-    print("审核结果：", result)
-    print("成本估算：", cost.total_cost)

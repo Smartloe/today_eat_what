@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 # Ensure package imports work when running as a script
 ROOT = Path(__file__).resolve().parents[1].parent
@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 import requests
 from langchain_core.tools import tool
 from today_eat_what.clients import CostTracker, ModelClient
-from today_eat_what.models import Recipe, RecipeStep
+from today_eat_what.models import Recipe
 
 try:  # 优先使用官方 SDK，缺失时自动降级为占位图
     from openai import OpenAI
@@ -119,8 +119,8 @@ class ImageAgent:
             logger.warning("保存图片失败 %s: %s", filename, exc)
             return None
 
-    def _generate_images(self, recipe: dict) -> List[str]:
-        """生成封面 + 每道菜一张 9:16 手绘步骤卡，失败则返回占位 URL。"""
+    def _generate_images(self, recipe: dict) -> Dict[str, List[str]]:
+        """生成封面 + 每道菜一张 9:16 手绘步骤卡，失败则返回占位 URL。返回 JSON: {'images': [...]}，确保封面第一张。"""
         recipe_obj = Recipe(**recipe)
         dishes_raw = recipe.get("dishes") or []
         dishes = []
@@ -152,43 +152,5 @@ class ImageAgent:
                 local_path = None
             else:
                 local_path = self._download_image(url, filename)
-            urls.append(local_path or url)
-        return urls
-
-
-if __name__ == "__main__":
-    import json
-    import argparse
-    from today_eat_what.config import load_api_keys
-    from today_eat_what.utils import load_dotenv, setup_logging
-
-    load_dotenv()
-    setup_logging()
-    parser = argparse.ArgumentParser(description="Test Doubao image generation.")
-    parser.add_argument("--recipe-json", help="Path to a recipe JSON file.")
-    args = parser.parse_args()
-
-    sample_recipe = {
-        "name": "西红柿炒蛋",
-        "description": "家常快手，酸甜鲜香。",
-        "ingredients": ["西红柿2个", "鸡蛋3个", "葱花10g", "盐2g", "油15ml"],
-        "steps": [
-            {"order": 1, "instruction": "鸡蛋打散，加少许盐，热油锅炒至半凝固盛出。"},
-            {"order": 2, "instruction": "西红柿切块，下锅翻炒出汁。"},
-            {"order": 3, "instruction": "倒回鸡蛋，加盐调味，翻匀后出锅撒葱花。"},
-        ],
-        "meal_type": "午餐",
-    }
-
-    if args.recipe_json:
-        path = Path(args.recipe_json)
-        sample_recipe = json.loads(path.read_text())
-
-    keys = load_api_keys()
-    cost = CostTracker()
-    doubao_client = ModelClient("doubao", keys.doubao)
-    agent = ImageAgent(doubao_client, cost)
-
-    urls = agent.generate_images_tool.invoke({"recipe": sample_recipe})
-    print("生成图片 URL:", urls)
-    print("成本估算:", cost.total_cost)
+            urls.append(url)
+        return {"images": urls}
