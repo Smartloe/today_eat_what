@@ -35,7 +35,7 @@ def build_app() -> StateGraph:
     deepseek_client = ModelClient("deepseek", api_keys.deepseek)
     longcat_client = ModelClient("longcat", api_keys.longcat)
     doubao_client = ModelClient("doubao", api_keys.doubao)
-    gpt4_client = ModelClient("gpt4", api_keys.gpt4)
+    gpt4_client = ModelClient("glm", api_keys.glm)
 
     recipe_agent = RecipeAgent(qwen_client, cost_tracker)
     content_agent = ContentAgent(deepseek_client, cost_tracker)

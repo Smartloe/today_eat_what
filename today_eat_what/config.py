@@ -35,7 +35,13 @@ MODEL_CONFIG: Dict[str, Dict[str, object]] = {
         "cost_per_call": 0.005,
     },
     "doubao": {"endpoint": os.environ.get("DOUBAO_ENDPOINT", ""), "cost_per_call": 0.03},
-    "gpt4": {"endpoint": os.environ.get("GPT4_ENDPOINT", ""), "cost_per_call": 0.05},
+    "glm": {
+        "endpoint": os.environ.get("GLM_ENDPOINT") or f"{os.environ.get('GLM_BASE_URL', '').rstrip('/')}/chat/completions"
+        if os.environ.get("GLM_BASE_URL")
+        else "",
+        "model": os.environ.get("GLM_MODEL"),
+        "cost_per_call": 0.05,
+    },
 }
 
 XHS_MCP_URL = os.environ.get("XIAOHONGSHU_MCP_URL", "")
@@ -48,7 +54,7 @@ class ApiKeys:
     deepseek: Optional[str]
     longcat: Optional[str]
     doubao: Optional[str]
-    gpt4: Optional[str]
+    glm: Optional[str]
 
 
 def load_api_keys() -> ApiKeys:
@@ -57,5 +63,5 @@ def load_api_keys() -> ApiKeys:
         deepseek=os.environ.get("DEEPSEEK_API_KEY"),
         longcat=os.environ.get("LONGCAT_API_KEY"),
         doubao=os.environ.get("DOUBAO_API_KEY"),
-        gpt4=os.environ.get("GPT4_API_KEY"),
+        glm=os.environ.get("GLM_API_KEY"),
     )

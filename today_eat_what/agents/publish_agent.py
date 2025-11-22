@@ -165,9 +165,9 @@ class PublishAgent:
         if self._agent:
             return self._agent
         llm = ChatOpenAI(
-            model=os.environ.get("GPT4_MODEL", "gpt-4o-mini"),
-            api_key=os.environ.get("GPT4_API_KEY"),
-            base_url=os.environ.get("GPT4_BASE_URL"),
+            model=os.environ.get("GLM_MODEL") or "THUDM/GLM-4-9B-0414",
+            api_key=os.environ.get("GLM_API_KEY"),
+            base_url=os.environ.get("GLM_BASE_URL"),
             temperature=0.2,
         )
         system_prompt = "你是小红书发布助手，负责调用发布工具并汇总发布结果。"
