@@ -125,19 +125,25 @@ def build_app() -> StateGraph:
                 normalized["ingredients"] = combined_ings
         return normalized
 
-    def _collect_tags_from_content(content: str, base_tags: List[str]) -> tuple[str, List[str]]:
-        """提取正文里的 #标签，去重后加入 tags，并从正文移除。"""
-        tags_found = re.findall(r"#([^\s#]+)", content)
-        tags_clean = []
-        for t in tags_found:
-            if t and t not in tags_clean:
-                tags_clean.append(t)
+    def _prepare_content_for_publish(content: str, title: str, base_tags: List[str]) -> tuple[str, List[str]]:
+        """移除标题行、提取标签、保持合理换行后返回正文+tags。"""
+        content_no_title = content
+        if title and content.startswith(title):
+            content_no_title = content[len(title):].lstrip("\n")
+        tags_found = re.findall(r"#([^\s#]+)", content_no_title)
         merged_tags: List[str] = []
-        for t in ["今天吃什么呢", *base_tags, *tags_clean]:
+        for t in ["今天吃什么呢", *base_tags, *tags_found]:
             if t and t not in merged_tags:
                 merged_tags.append(t)
-        cleaned_content = re.sub(r"#([^\s#]+)", "", content)
-        cleaned_content = re.sub(r"\s{2,}", " ", cleaned_content).strip()
+        cleaned = re.sub(r"#([^\s#]+)", "", content_no_title)
+        lines = [line.strip() for line in cleaned.splitlines()]
+        # 去掉多余空行，保留自然换行
+        normalized_lines: List[str] = []
+        for line in lines:
+            if not line and normalized_lines and normalized_lines[-1] == "":
+                continue
+            normalized_lines.append(line)
+        cleaned_content = "\n".join([ln for ln in normalized_lines if ln or ln == ""]).strip()
         return cleaned_content, merged_tags
 
     def node_recipe(state: WorkflowState) -> WorkflowState:
@@ -190,7 +196,8 @@ def build_app() -> StateGraph:
         }
 
     def node_publish(state: WorkflowState) -> WorkflowState:
-        content = state["content"].get("content") if isinstance(state["content"], dict) else state["content"]
+        content_raw = state["content"].get("content") if isinstance(state["content"], dict) else state["content"]
+        title = state["content"].get("title") if isinstance(state.get("content"), dict) else ""
         imgs = state.get("images") or []
         if not imgs:
             fut = state.get("images_future")
@@ -204,7 +211,7 @@ def build_app() -> StateGraph:
                 imgs_result = image_agent.generate_images_tool.invoke({"recipe": state["recipe_data"]})
                 imgs = imgs_result.get("images") if isinstance(imgs_result, dict) else imgs_result
         tags_base = state["content"].get("tags") if isinstance(state.get("content"), dict) else []
-        content_cleaned, tags = _collect_tags_from_content(str(content), tags_base or [])
+        content_cleaned, tags = _prepare_content_for_publish(str(content_raw), title or "", tags_base or [])
         result = publish_agent.publish_tool.invoke({"content": content_cleaned, "images": imgs, "tags": tags})
         logger.info("发布结果：%s %s", result.get("success"), result.get("post_id"))
         return {
