@@ -1,4 +1,6 @@
 import logging
+import re
+from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
 from typing import Any, Dict, List, TypedDict
 
@@ -22,6 +24,7 @@ class WorkflowState(TypedDict, total=False):
     audit_result: bool
     rewrite_attempted: bool
     images: List[str]
+    images_future: Future
     publish_result: Dict[str, Any]
     cost: float
 
@@ -29,6 +32,7 @@ class WorkflowState(TypedDict, total=False):
 def build_app() -> StateGraph:
     load_dotenv()
     setup_logging()
+    image_executor = ThreadPoolExecutor(max_workers=2)
     api_keys = load_api_keys()
     cost_tracker = CostTracker()
 
@@ -121,12 +125,34 @@ def build_app() -> StateGraph:
                 normalized["ingredients"] = combined_ings
         return normalized
 
+    def _collect_tags_from_content(content: str, base_tags: List[str]) -> tuple[str, List[str]]:
+        """提取正文里的 #标签，去重后加入 tags，并从正文移除。"""
+        tags_found = re.findall(r"#([^\s#]+)", content)
+        tags_clean = []
+        for t in tags_found:
+            if t and t not in tags_clean:
+                tags_clean.append(t)
+        merged_tags: List[str] = []
+        for t in ["今天吃什么呢", *base_tags, *tags_clean]:
+            if t and t not in merged_tags:
+                merged_tags.append(t)
+        cleaned_content = re.sub(r"#([^\s#]+)", "", content)
+        cleaned_content = re.sub(r"\s{2,}", " ", cleaned_content).strip()
+        return cleaned_content, merged_tags
+
     def node_recipe(state: WorkflowState) -> WorkflowState:
         recipe_data = recipe_agent.generate_recipe_tool.invoke({"meal_type": state["meal_type"]})
         recipe_data = _normalize_recipe_data(recipe_data)
         recipe = Recipe(**recipe_data)
         logger.info("生成菜谱：%s", recipe.name)
-        return {**state, "recipe_data": recipe_data, "cost": cost_tracker.total_cost}
+        # 并行启动图片生成任务
+        images_future = image_executor.submit(lambda: image_agent.generate_images_tool.invoke({"recipe": recipe_data}))
+        return {
+            **state,
+            "recipe_data": recipe_data,
+            "images_future": images_future,
+            "cost": cost_tracker.total_cost,
+        }
 
     def node_content(state: WorkflowState) -> WorkflowState:
         content = content_agent.generate_content_tool.invoke({"recipe": state["recipe_data"]})
@@ -163,19 +189,28 @@ def build_app() -> StateGraph:
             "cost": cost_tracker.total_cost,
         }
 
-    def node_images(state: WorkflowState) -> WorkflowState:
-        imgs_result = image_agent.generate_images_tool.invoke({"recipe": state["recipe_data"]})
-        imgs = imgs_result.get("images") if isinstance(imgs_result, dict) else imgs_result
-        return {**state, "images": imgs, "cost": cost_tracker.total_cost}
-
     def node_publish(state: WorkflowState) -> WorkflowState:
         content = state["content"].get("content") if isinstance(state["content"], dict) else state["content"]
         imgs = state.get("images") or []
-        tags = ["今天吃什么呢"]
-        result = publish_agent.publish_tool.invoke({"content": content, "images": imgs, "tags": tags})
+        if not imgs:
+            fut = state.get("images_future")
+            if fut:
+                try:
+                    imgs_result = fut.result(timeout=120)
+                    imgs = imgs_result.get("images") if isinstance(imgs_result, dict) else imgs_result
+                except Exception as exc:
+                    logger.warning("并行图片任务失败，将同步生成：%s", exc)
+            if not imgs:
+                imgs_result = image_agent.generate_images_tool.invoke({"recipe": state["recipe_data"]})
+                imgs = imgs_result.get("images") if isinstance(imgs_result, dict) else imgs_result
+        tags_base = state["content"].get("tags") if isinstance(state.get("content"), dict) else []
+        content_cleaned, tags = _collect_tags_from_content(str(content), tags_base or [])
+        result = publish_agent.publish_tool.invoke({"content": content_cleaned, "images": imgs, "tags": tags})
         logger.info("发布结果：%s %s", result.get("success"), result.get("post_id"))
         return {
             **state,
+            "content": {**state["content"], "content": content_cleaned} if isinstance(state.get("content"), dict) else content_cleaned,
+            "images": imgs,
             "publish_result": result,
             "cost": cost_tracker.total_cost,
         }
@@ -185,7 +220,6 @@ def build_app() -> StateGraph:
     graph_builder.add_node("generate_content", node_content)
     graph_builder.add_node("audit_content", node_audit)
     graph_builder.add_node("rewrite_content", node_rewrite)
-    graph_builder.add_node("generate_images", node_images)
     graph_builder.add_node("publish", node_publish)
 
     graph_builder.set_entry_point("determine_meal")
@@ -195,15 +229,14 @@ def build_app() -> StateGraph:
 
     def audit_decision(state: WorkflowState) -> str:
         if state.get("audit_result"):
-            return "generate_images"
+            return "publish"
         if state.get("rewrite_attempted"):
-            # 已重写过一次仍未通过，直接进入生成图片/发布，避免死循环
-            return "generate_images"
+            # 已重写过一次仍未通过，直接进入发布，避免死循环
+            return "publish"
         return "rewrite_content"
 
-    graph_builder.add_conditional_edges("audit_content", audit_decision, {"generate_images": "generate_images", "rewrite_content": "rewrite_content"})
+    graph_builder.add_conditional_edges("audit_content", audit_decision, {"publish": "publish", "rewrite_content": "rewrite_content"})
     graph_builder.add_edge("rewrite_content", "audit_content")
-    graph_builder.add_edge("generate_images", "publish")
     graph_builder.add_edge("publish", END)
 
     return graph_builder.compile()

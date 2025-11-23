@@ -4,11 +4,12 @@ __pycache__/
 build/
 dist/
 wheels/
+images/
 *.egg-info
 
 # Virtual environments
 .venv
 .env
-images
 .gitignore
 .gitignore
+
