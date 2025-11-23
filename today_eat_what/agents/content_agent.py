@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from today_eat_what.clients import CostTracker, ModelClient
+from today_eat_what.config import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_DEFAULT
 from today_eat_what.models import Recipe
 
 
@@ -94,10 +95,13 @@ class ContentAgent:
         if self._agent:
             return self._agent
         # 尝试用 DeepSeek API，如果未配置则回退到 OpenAI 兼容参数。
+        model_name = DEEPSEEK_MODEL_DEFAULT
+        if not model_name:
+            raise RuntimeError("DEEPSEEK_MODEL 未设置，无法生成文案")
         llm = ChatOpenAI(
-            model="deepseek-chat",
+            model=model_name,
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
-            base_url=os.environ.get("DEEPSEEK_BASE_URL"),
+            base_url=DEEPSEEK_BASE_URL or None,
             temperature=0.7,
         )
         system_prompt = "你是小红书美食创作者，擅长写吸睛标题和口味、步骤亮点描述。"

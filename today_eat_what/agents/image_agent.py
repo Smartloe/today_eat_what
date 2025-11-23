@@ -28,13 +28,9 @@ class ImageAgent:
         self.cost = cost
         self._model = (
             os.environ.get("DOUBAO_IMAGE_MODEL")
-            or os.environ.get("DOUBAO_MODEL")
-            or "doubao-seedream-4-0-250828"
         )
         self._base_url = (
             os.environ.get("DOUBAO_BASE_URL")
-            or os.environ.get("ARK_BASE_URL")
-            or "https://ark.cn-beijing.volces.com/api/v3"
         ).rstrip("/")
         self._client = self._init_doubao_client()
         self.generate_images_tool = tool("generate_images", return_direct=True)(self._generate_images)

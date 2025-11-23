@@ -1,8 +1,8 @@
 """
-Quick LangChain call to SiliconFlow Qwen/Qwen3-8B.
+Quick LangChain call to SiliconFlow Qwen (model name from env).
 
 Usage:
-    SILICONFLOW_API_KEY=sk-... uv run python scripts/test_qwen_langchain.py
+    Qwen_API_KEY=sk-... QWEN_MODEL=<model-id> uv run python scripts/test_qwen_langchain.py
 """
 
 import os
@@ -10,16 +10,22 @@ import os
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
+from today_eat_what.config import QWEN_MODEL_DEFAULT, Qwen_BASE_URL
+
 
 def main() -> None:
-    api_key = os.environ.get("SILICONFLOW_API_KEY") or os.environ.get("QWEN_API_KEY")
+    api_key = os.environ.get("Qwen_API_KEY") or os.environ.get("QWEN_API_KEY")
     if not api_key:
-        raise SystemExit("请在环境变量中设置 SILICONFLOW_API_KEY 或 QWEN_API_KEY")
+        raise SystemExit("请在环境变量中设置 Qwen_API_KEY 或 QWEN_API_KEY")
+
+    model_name = QWEN_MODEL_DEFAULT
+    if not model_name:
+        raise SystemExit("请在环境变量中设置 QWEN_MODEL 或 Qwen_MODEL")
 
     llm = ChatOpenAI(
-        model="Qwen/Qwen3-8B",
+        model=model_name,
         api_key=api_key,
-        base_url=os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
+        base_url=Qwen_BASE_URL,
         temperature=0.3,
     )
 

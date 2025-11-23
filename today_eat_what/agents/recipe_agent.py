@@ -5,12 +5,19 @@ import dotenv
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
+import sys
+from pathlib import Path
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_core.tools import tool
 
+ROOT = Path(__file__).resolve().parents[1].parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from today_eat_what.clients import CostTracker, ModelClient
+from today_eat_what.config import QWEN_BASE_URL, QWEN_MODEL_DEFAULT
 
 """
 菜谱智能体（类封装）：
@@ -65,19 +72,45 @@ class RecipeAgent:
         self.people = people
         self.dislikes = dislikes
         self.agent = None
+        self._llm = None
+        self._llm_unavailable = False
+        self._setup_done = False
         self.model_client = model_client
         self.cost = cost or CostTracker()
         self.generate_recipe_tool = tool("generate_recipe", return_direct=True)(self._generate_recipe_sync)
 
-    def _init_model(self) -> ChatOpenAI:
-        """初始化 Qwen 模型（SiliconFlow 兼容接口）。"""
-        return ChatOpenAI(
-            model=os.environ.get("QWEN_MODEL", "Qwen/Qwen3-8B"),
-            api_key=os.environ.get("SILICONFLOW_API_KEY"),
-            base_url=os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
-            temperature=0.35,
-            max_tokens=1800,
+    def _init_model(self) -> Optional[ChatOpenAI]:
+        """初始化 Qwen 模型（SiliconFlow 兼容接口）。缺失配置时回退模板。"""
+        if self._llm is not None or self._llm_unavailable:
+            return self._llm
+        model_name = (
+            QWEN_MODEL_DEFAULT
+            or os.environ.get("QWEN_MODEL")
+            or os.environ.get("Qwen_MODEL")
+            or os.environ.get("Qwen_MODEL")
         )
+        if not model_name:
+            logger.warning("QWEN_MODEL/Qwen_MODEL 未设置，将使用内置菜谱模板。")
+            self._llm_unavailable = True
+            return None
+        api_key = os.environ.get("QWEN_API_KEY") or os.environ.get("Qwen_API_KEY") or os.environ.get("Qwen_API_KEY")
+        if not api_key:
+            logger.warning("QWEN_API_KEY/Qwen_API_KEY 未设置，将使用内置菜谱模板。")
+            self._llm_unavailable = True
+            return None
+        try:
+            self._llm = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                base_url=QWEN_BASE_URL,
+                temperature=0.35,
+                max_tokens=1800,
+            )
+            return self._llm
+        except Exception as exc:  # pragma: no cover - runtime guard
+            logger.warning("初始化 Qwen 模型失败，将使用内置菜谱模板：%s", exc)
+            self._llm_unavailable = True
+            return None
 
     async def _load_tools(self) -> List:
         # 支持 streamable_http MCP (优先环境变量 URL)，否则回退到 stdio npx。
@@ -102,7 +135,12 @@ class RecipeAgent:
 
     async def setup(self) -> None:
         """初始化 Agent，仅调用一次。"""
+        if self._setup_done:
+            return
+        self._setup_done = True
         model = self._init_model()
+        if not model:
+            return
         tools = await self._load_tools()
         system_prompt = f"""
 你是一个专业的烹饪助手。优先使用 MCP 工具，策略如下：
@@ -144,19 +182,17 @@ class RecipeAgent:
 - dishes: 长度2-3的数组，每项 {{"name":菜名, "description":简介, "ingredients":食材数组（带数量）, "steps":数组，每项 {{"order":编号,"instruction":步骤描述}}}}
 约束：适合 {people} 人，当前餐次 {meal}，季节 {season}，忌口/过敏：{dislikes}。仅输出 JSON，不要多余文字。
 """
-        try:
-            resp = llm.invoke(prompt).content
-            parsed = self._parse_recipe(resp, meal)
-            if parsed:
-                return parsed
-        except Exception:
-            logger.error("本地模型生成菜谱失败", exc_info=True)
-        return {}
+        if not llm:
+            raise RuntimeError("未配置 Qwen 模型，且 MCP 输出不可用，无法生成菜谱。")
+        resp = llm.invoke(prompt).content
+        parsed = self._parse_recipe(resp, meal)
+        if parsed:
+            return parsed
+        raise RuntimeError("Qwen 返回内容无法解析为 JSON 菜谱，请重试或检查提示词。")
 
     async def generate_recipe(self, people: Optional[int] = None, dislikes: Optional[str] = None, meal_type: Optional[str] = None) -> Dict:
         """生成菜谱（优先 MCP 工具，带季节/餐次约束）。"""
-        if not self.agent:
-            await self.setup()
+        await self.setup()
         meal = meal_type or get_meal_type()
         season = get_season()
         people = people or self.people
@@ -168,24 +204,24 @@ class RecipeAgent:
             "优先使用 mcp_howtocook_whatToEat，若不合适再用 mcp_howtocook_getAllRecipes 过滤符合餐次+季节的菜。"
         )
 
-        try:
-            result: Dict = await self.agent.ainvoke(
-                {
-                    "messages": [{"role": "user", "content": user_message}]
-                }
-            )
-            if result.get("messages"):
-                final_message = result["messages"][-1]
-                content = final_message.content
-                parsed = self._parse_recipe(content, meal_type=meal)
-                if parsed:
-                    return parsed
-                logger.warning("未解析出有效 JSON，改为直接模型生成。")
-                return self._generate_local_recipe(meal, season, people, dislikes)
-            return self._generate_local_recipe(meal, season, people, dislikes)
-        except Exception as exc:  # pragma: no cover - runtime guardrail
-            logger.error("生成菜谱失败: %s", exc)
-            return self._generate_local_recipe(meal, season, people, dislikes)
+        if self.agent:
+            try:
+                result: Dict = await self.agent.ainvoke(
+                    {
+                        "messages": [{"role": "user", "content": user_message}]
+                    }
+                )
+                if result.get("messages"):
+                    final_message = result["messages"][-1]
+                    content = final_message.content
+                    parsed = self._parse_recipe(content, meal_type=meal)
+                    if parsed:
+                        return parsed
+                    logger.warning("未解析出有效 JSON，改为直接模型生成。")
+            except Exception as exc:  # pragma: no cover - runtime guardrail
+                logger.error("生成菜谱失败: %s", exc)
+
+        return self._generate_local_recipe(meal, season, people, dislikes)
 
 
     def _generate_recipe_sync(self, meal_type: Optional[str] = None, people: Optional[int] = None, dislikes: Optional[str] = None) -> Dict:
@@ -196,3 +232,6 @@ class RecipeAgent:
             return loop.run_until_complete(self.generate_recipe(people=people, dislikes=dislikes, meal_type=meal_type))
         finally:
             loop.close()
+
+
+

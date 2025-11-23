@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from today_eat_what.clients import CostTracker, ModelClient
-from today_eat_what.config import XHS_MCP_URL
+from today_eat_what.config import GLM_BASE_URL, GLM_MODEL_DEFAULT, XHS_MCP_URL
 from today_eat_what.models import PublishResult
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ class PublishAgent:
         self._agent = None
         self._mcp_client: Optional[MultiServerMCPClient] = None
         self._mcp_publish_tool = None
+        self._mcp_tools_map: dict[str, Any] = {}
         self._mcp_tool_checked = False
         self._mcp_server_name = (
             os.environ.get("XHS_MCP_SERVER")
@@ -68,6 +69,7 @@ class PublishAgent:
             tools = await asyncio.wait_for(client.get_tools(server_name=self._mcp_server_name), timeout=20)
             if not tools:
                 raise RuntimeError("小红书 MCP 未返回任何工具，请检查服务。")
+            self._mcp_tools_map = {t.name: t for t in tools}
             # 优先精确 publish_content，其次 publish_with_video，再兜底包含 publish 的工具。
             name_map = {t.name: t for t in tools}
             if "publish_content" in name_map:
@@ -120,11 +122,23 @@ class PublishAgent:
         # 一些 MCP 工具要求 title 字段，尝试自动补全。
         if "title" not in args:
             args["title"] = self._infer_title(content)
+        args["title"] = self._clip_title(args.get("title", "自动发布"))
         logger.info("调用 MCP 工具 %s，传参 keys=%s", getattr(publish_tool, "name", "unknown"), list(args.keys()))
 
         loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(asyncio.wait_for(publish_tool.ainvoke(args), timeout=30))
+            def invoke_once():
+                return loop.run_until_complete(asyncio.wait_for(publish_tool.ainvoke(args), timeout=30))
+
+            try:
+                result = invoke_once()
+            except Exception as exc:  # pragma: no cover - 外部 MCP
+                if "标题长度" in str(exc):
+                    args["title"] = self._clip_title(args.get("title", "自动发布"), strict=True)
+                    logger.info("检测到标题过长，已截断后重试：%s", args["title"])
+                    result = invoke_once()
+                else:
+                    raise
         except Exception as exc:  # pragma: no cover - 外部 MCP
             self._mcp_error = f"调用小红书 MCP 发布失败：{exc}"
             logger.error(self._mcp_error)
@@ -142,13 +156,50 @@ class PublishAgent:
             )
         return PublishResult(success=True, post_id=str(result), detail={"output": result})
 
+    def _maybe_login_and_retry(self, error_msg: str, content: str, images: List[str], tags: Optional[List[str]]) -> Optional[PublishResult]:
+        """若存在登录工具则调用一次后重试发布。"""
+        login_tool = None
+        for name, tool_obj in self._mcp_tools_map.items():
+            if "login" in name.lower() or "auth" in name.lower():
+                login_tool = tool_obj
+                break
+        if not login_tool:
+            return None
+
+        loop = asyncio.new_event_loop()
+        try:
+            logger.info("检测到登录相关工具 %s，尝试登录后重试发布。", getattr(login_tool, "name", "login"))
+            try:
+                loop.run_until_complete(asyncio.wait_for(login_tool.ainvoke({}), timeout=30))
+            except Exception as exc:  # pragma: no cover - 外部 MCP
+                logger.error("调用登录工具失败：%s", exc)
+                return None
+            return self._publish_via_mcp(content, images, tags=tags)
+        finally:
+            loop.close()
+
     def _publish(self, content: str, images: List[str], tags: Optional[List[str]] = None) -> dict:
-        """仅通过 MCP 发布小红书，如失败则抛出异常。"""
-        mcp_result = self._publish_via_mcp(content, images, tags=tags)
+        """通过 MCP 发布小红书；失败时返回 success=false 供上游处理。"""
+        try:
+            mcp_result = self._publish_via_mcp(content, images, tags=tags)
+        except Exception as exc:
+            error_msg = str(exc) or self._mcp_error or "调用小红书 MCP 发布失败"
+            logger.error("小红书发布失败：%s", error_msg)
+            retry_result = self._maybe_login_and_retry(error_msg, content, images, tags)
+            if retry_result and retry_result.success:
+                return retry_result.model_dump()
+            detail = {"error": error_msg}
+            if retry_result and not retry_result.success:
+                detail["retry_error"] = retry_result.detail or retry_result.post_id
+            return PublishResult(success=False, detail=detail).model_dump()
+
         if not mcp_result:
-            raise RuntimeError("小红书 MCP 发布返回空结果。")
+            return PublishResult(success=False, detail={"error": "小红书 MCP 发布返回空结果"}).model_dump()
         if not mcp_result.success:
-            raise RuntimeError(f"小红书发布失败：{mcp_result.detail or mcp_result.post_id}")
+            retry_result = self._maybe_login_and_retry(str(mcp_result.detail), content, images, tags)
+            if retry_result:
+                return retry_result.model_dump()
+            return mcp_result.model_dump()
         return mcp_result.model_dump()
 
     @staticmethod
@@ -160,14 +211,26 @@ class PublishAgent:
             title = title[:27] + "..."
         return title or "自动发布"
 
+    def _clip_title(self, title: str, strict: bool = False) -> str:
+        """确保标题不会触发 MCP 字段长度限制。"""
+        max_len_env = os.environ.get("PUBLISH_TITLE_MAX_LEN")
+        max_len = int(max_len_env) if max_len_env and max_len_env.isdigit() else 20
+        if strict:
+            max_len = min(max_len, 18)
+        cleaned = title.strip() or "自动发布"
+        return cleaned[:max_len] if len(cleaned) > max_len else cleaned
+
     def get_agent(self):
         """使用 LangChain create_agent 包装为发布智能体。"""
         if self._agent:
             return self._agent
+        model_name = GLM_MODEL_DEFAULT
+        if not model_name:
+            raise RuntimeError("GLM_MODEL 未设置，无法发布到小红书")
         llm = ChatOpenAI(
-            model=os.environ.get("GLM_MODEL") or "THUDM/GLM-4-9B-0414",
+            model=model_name,
             api_key=os.environ.get("GLM_API_KEY"),
-            base_url=os.environ.get("GLM_BASE_URL"),
+            base_url=GLM_BASE_URL or None,
             temperature=0.2,
         )
         system_prompt = "你是小红书发布助手，负责调用发布工具并汇总发布结果。"

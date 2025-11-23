@@ -31,10 +31,16 @@ class ModelClient:
         self.api_key = api_key
         self.endpoint = str(MODEL_CONFIG.get(vendor, {}).get("endpoint", "")).rstrip("/")
         if not self.endpoint:
-            base = os.environ.get(f"{vendor.upper()}_BASE_URL", "")
+            base = os.environ.get(f"{vendor.upper()}_BASE_URL", "") or os.environ.get(f"{vendor.capitalize()}_BASE_URL", "")
             if base:
                 self.endpoint = base.rstrip("/") + "/chat/completions"
-        self.default_model = default_model or MODEL_CONFIG.get(vendor, {}).get("model")
+        env_model = (
+            os.environ.get(f"{vendor.upper()}_MODEL")
+            or os.environ.get(f"{vendor.capitalize()}_MODEL")
+            or os.environ.get(f"{vendor}_MODEL")
+            or os.environ.get(f"{vendor.upper()}__MODEL")
+        )
+        self.default_model = default_model or env_model or MODEL_CONFIG.get(vendor, {}).get("model")
         if not self.endpoint:
             logger.warning("Endpoint for %s not configured; calls will return mock data.", vendor)
         self.base_url = self._derive_base_url(self.endpoint)
@@ -49,13 +55,19 @@ class ModelClient:
                 return endpoint[: -len(suffix)].rstrip("/")
         return endpoint
 
+    def _mock_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {"mock": True, "payload": payload, "vendor": self.vendor}
+
     def _init_chat_llm(self) -> Optional[ChatOpenAI]:
         """Prefer ChatOpenAI for all OpenAI兼容端点，缺失时回退为 HTTP 请求。"""
         if not self.base_url or not self.api_key:
             return None
+        if not self.default_model:
+            logger.warning("Model name for %s not configured; ChatOpenAI client disabled.", self.vendor)
+            return None
         try:
             return ChatOpenAI(
-                model=self.default_model or "gpt-4o-mini",
+                model=self.default_model,
                 api_key=self.api_key,
                 base_url=self.base_url,
                 temperature=0.4,
@@ -101,13 +113,13 @@ class ModelClient:
         return run_with_retry(lambda: run_with_timeout(do_request, timeout))
 
     def invoke(self, prompt: str, extra: Optional[Dict[str, Any]] = None, timeout: float = 10.0) -> Dict[str, Any]:
+        target_model = (extra or {}).get("model") if extra else None
         if self._chat:
-            model_name = (extra or {}).get("model") if extra else None
             def do_invoke() -> Dict[str, Any]:
                 chat_llm = self._chat
-                if model_name and model_name != getattr(chat_llm, "model_name", None):
+                if target_model and target_model != getattr(chat_llm, "model_name", None):
                     chat_llm = ChatOpenAI(
-                        model=model_name,
+                        model=target_model,
                         api_key=self.api_key,
                         base_url=self.base_url,
                         temperature=getattr(self._chat, "temperature", 0.4),
@@ -118,11 +130,21 @@ class ModelClient:
 
             return run_with_retry(lambda: run_with_timeout(do_invoke, timeout))
 
+        if not self.endpoint or not self.api_key:
+            payload = {"prompt": prompt}
+            if extra:
+                payload.update(extra)
+            return self._mock_response(payload)
+
         # If hitting OpenAI-compatible chat, wrap prompt into messages and include model.
         if self.endpoint.endswith("/chat/completions"):
             payload: Dict[str, Any] = {"messages": [{"role": "user", "content": prompt}]}
-            if self.default_model:
-                payload["model"] = self.default_model
+            model_name = target_model or self.default_model
+            if not model_name:
+                if extra:
+                    payload.update(extra)
+                return self._mock_response(payload)
+            payload["model"] = model_name
         else:
             payload = {"prompt": prompt}
         if extra:
@@ -158,9 +180,21 @@ class ModelClient:
 
             return run_with_retry(lambda: run_with_timeout(do_invoke, timeout))
 
+        if not self.endpoint or not self.api_key:
+            payload: Dict[str, Any] = {"messages": messages}
+            if extra:
+                payload.update(extra)
+            if model:
+                payload["model"] = model
+            return self._mock_response(payload)
+
         payload: Dict[str, Any] = {"messages": messages}
         if model or self.default_model:
             payload["model"] = model or self.default_model
+        else:
+            if extra:
+                payload.update(extra)
+            return self._mock_response(payload)
         if extra:
             payload.update(extra)
         try:

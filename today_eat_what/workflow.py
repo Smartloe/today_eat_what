@@ -20,6 +20,7 @@ class WorkflowState(TypedDict, total=False):
     recipe_data: Dict[str, Any]
     content: Dict[str, str]
     audit_result: bool
+    rewrite_attempted: bool
     images: List[str]
     publish_result: Dict[str, Any]
     cost: float
@@ -154,7 +155,13 @@ def build_app() -> StateGraph:
             if isinstance(state["content"], dict)
             else new_body,
         }
-        return {**state, "content": rewritten, "audit_result": True, "cost": cost_tracker.total_cost}
+        return {
+            **state,
+            "content": rewritten,
+            "audit_result": False,
+            "rewrite_attempted": True,
+            "cost": cost_tracker.total_cost,
+        }
 
     def node_images(state: WorkflowState) -> WorkflowState:
         imgs_result = image_agent.generate_images_tool.invoke({"recipe": state["recipe_data"]})
@@ -187,10 +194,15 @@ def build_app() -> StateGraph:
     graph_builder.add_edge("generate_content", "audit_content")
 
     def audit_decision(state: WorkflowState) -> str:
-        return "generate_images" if state.get("audit_result") else "rewrite_content"
+        if state.get("audit_result"):
+            return "generate_images"
+        if state.get("rewrite_attempted"):
+            # 已重写过一次仍未通过，直接进入生成图片/发布，避免死循环
+            return "generate_images"
+        return "rewrite_content"
 
     graph_builder.add_conditional_edges("audit_content", audit_decision, {"generate_images": "generate_images", "rewrite_content": "rewrite_content"})
-    graph_builder.add_edge("rewrite_content", "generate_images")
+    graph_builder.add_edge("rewrite_content", "audit_content")
     graph_builder.add_edge("generate_images", "publish")
     graph_builder.add_edge("publish", END)
 
