@@ -87,7 +87,7 @@ class ContentAgent:
             ]
             content_text, tags = self._split_tags(body, base_tags=base_tags)
             content = f"{title}\n{content_text}"
-            return {"title": title, "body": content_text, "content": content, "tags": tags}
+            return {"title": title, "content": content, "tags": tags}
         except Exception:
             # Fallback本地模板，确保推理不中断。
             fallback = self._fallback_copy(recipe_obj, dish_names, summary_parts, weekday)
@@ -97,7 +97,7 @@ class ContentAgent:
         tags = ["今天吃什么呢", "当季食材", f"{recipe_obj.meal_type}灵感"]
         body = f"今天周{weekday} | {recipe_obj.meal_type}\n" f"{'；'.join(summary_parts)}"
         title = f"{' + '.join(dish_names[:3])} | 今日餐单 🍽️"
-        return {"title": title, "body": body, "content": f"{title}\n{body}", "tags": tags}
+        return {"title": title, "content": f"{title}\n{body}", "tags": tags}
 
     @staticmethod
     def _normalize_weekday(body: str, weekday: str, meal_type: str) -> str:
