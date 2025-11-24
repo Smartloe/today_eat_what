@@ -178,8 +178,12 @@ def build_app() -> StateGraph:
         )
         cost_tracker.add("deepseek")
         original = state["content"].get("content") if isinstance(state["content"], dict) else str(state["content"])
-        resp = deepseek_client.invoke(safe_prompt + "\n原文：" + original)
-        new_body = resp.get("text") or resp.get("output") or original
+        try:
+            resp = deepseek_client.invoke(safe_prompt + "\n原文：" + original, timeout=30.0)
+            new_body = resp.get("text") or resp.get("output") or original
+        except TimeoutError:
+            logger.warning("安全改写超时，沿用原文进入发布。")
+            new_body = original
         rewritten = {
             "title": state["content"].get("title", "安全改写") if isinstance(state["content"], dict) else "安全改写",
             "body": new_body,
