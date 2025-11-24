@@ -37,14 +37,21 @@ HOWTOCOOK_MCP_URL=http://your-cook-mcp    # 可选，菜谱 MCP
 3) `content_agent`：DeepSeek 写文案，输出结构 `title/content/tags`，自动抽取正文里的 #标签并补足到 6+ 条。  
 4) `audit_agent`：LongCat 审核，不通过则进入安全重写再审。  
 5) 图片并行：菜谱生成后立即异步触发豆包文生图，发布前收集结果，失败再同步兜底。  
-6) `publish_agent`：小红书 MCP 发布，标题过长自动截断；若发布失败会尝试调用登录/鉴权工具后重试。
+6) `publish_agent`：小红书 MCP 发布，标题过长自动截断；发布失败会直接返回错误详情，需自行处理。
 
 ### 发布格式约束
 - 发布时会剥离标题，正文按换行输出，正文内的 `#标签` 会移除并加入 `tags` 参数；始终附加默认标签“今天吃什么呢”。
 
 ### 本地/调试提示
 - HowToCook MCP 不可用时会直接用 Qwen 生成；图片生成缺配置会返回占位 URL。
-- MCP 500/登录失效：`publish_agent` 会自动尝试检测登录工具（如 `check_login_status`）并重试；仍失败需检查 MCP 服务。  
+- MCP 500/登录失效：会直接返回错误详情，请检查 MCP 服务或手动处理登录。  
+
+### Docker 部署 & 定时
+- 构建镜像：`docker build -t today-eat-what .`
+- 运行一次（读取宿主 `.env`）：`docker run --rm --env-file /path/to/.env today-eat-what`
+- 如需时区对齐，可追加 `-e TZ=Asia/Shanghai`。
+- 通过宿主机 cron 定时（示例：7/12/18 点执行）：
+  - `0 7,12,18 * * * docker run --rm --env-file /path/to/.env -e TZ=Asia/Shanghai today-eat-what >> /var/log/today_eat_what.log 2>&1`
 - DNS 访问受限时豆包图片可能无法保存本地，但会继续流程。
 
 ### 目录索引
